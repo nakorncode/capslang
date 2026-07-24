@@ -1,5 +1,7 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Security.Principal;
 using System.Text.Json;
 using System.Windows.Forms;
 
@@ -7,7 +9,7 @@ namespace CapsLang;
 
 internal static class Program
 {
-    private const string MutexName = "Local\\NakornCode.CapsLang";
+    private const string MutexName = "Global\\NakornCode.CapsLang";
     private const int WH_KEYBOARD_LL = 13;
     private const int WM_KEYDOWN = 0x0100;
     private const int WM_KEYUP = 0x0101;
@@ -29,19 +31,28 @@ internal static class Program
     [STAThread]
     private static void Main()
     {
+        ApplicationConfiguration.Initialize();
+
+        if (!IsElevated())
+        {
+            HandOffToElevatedInstance();
+            return;
+        }
+
         singleInstance = new Mutex(true, MutexName, out var createdNew);
         if (!createdNew)
         {
             return;
         }
 
-        ApplicationConfiguration.Initialize();
         var firstRun = !SettingsStore.Exists();
         appSettings = SettingsStore.Load();
 
+        LegacyStartupShortcut.RemoveIfPresent();
+        ElevatedStartup.EnsureRegistered(enableAtLogon: firstRun || ElevatedStartup.IsEnabled());
+
         if (firstRun)
         {
-            StartupShortcut.Enable();
             SettingsStore.Save(appSettings);
         }
 
@@ -65,6 +76,54 @@ internal static class Program
         Application.Run();
     }
 
+    private static void HandOffToElevatedInstance()
+    {
+        if (ElevatedStartup.Exists())
+        {
+            try
+            {
+                ElevatedStartup.Run();
+                return;
+            }
+            catch (Exception)
+            {
+                // Fall through to a one-time UAC relaunch.
+            }
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = Application.ExecutablePath,
+                WorkingDirectory = AppContext.BaseDirectory,
+                UseShellExecute = true,
+                Verb = "runas"
+            });
+        }
+        catch (Win32Exception)
+        {
+            MessageBox.Show(
+                """
+                CapsLang needs one administrator approval so it can run elevated.
+
+                That lets CapsLock switch languages inside elevated apps such as
+                Task Manager, and lets Windows start CapsLang later without more UAC prompts.
+
+                Run CapsLang again and choose Yes.
+                """,
+                "CapsLang",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+    }
+
+    private static bool IsElevated()
+    {
+        using var identity = WindowsIdentity.GetCurrent();
+        return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+    }
+
     private static NotifyIcon CreateTrayIcon()
     {
         var menu = new ContextMenuStrip();
@@ -76,7 +135,7 @@ internal static class Program
         var startupItem = new ToolStripMenuItem("Launch on startup")
         {
             CheckOnClick = true,
-            Checked = StartupShortcut.IsEnabled()
+            Checked = ElevatedStartup.IsEnabled()
         };
 
         enabledItem.CheckedChanged += (_, _) =>
@@ -89,11 +148,11 @@ internal static class Program
         {
             if (startupItem.Checked)
             {
-                StartupShortcut.Enable();
+                ElevatedStartup.EnsureRegistered(enableAtLogon: true);
             }
             else
             {
-                StartupShortcut.Disable();
+                ElevatedStartup.SetEnabled(false);
             }
         };
 
@@ -117,19 +176,19 @@ internal static class Program
     {
         MessageBox.Show(
             """
-            CapsLang turns CapsLock into an input-language switch key.
+            CapsLang is a tiny tray tool that remaps CapsLock to switch the
+            Windows input language.
 
-            CapsLock — switch to the next Windows input language
-            Alt+CapsLock — toggle real CapsLock
+            CapsLock — next input language
+            Alt+CapsLock — real CapsLock toggle
 
-            CapsLang runs in the system tray. Right-click the tray icon for
-            Enabled, Launch on startup, Help, and Exit.
+            CapsLang runs elevated by default so the remap also works in
+            administrator windows. The first launch asks for UAC once, then a
+            logon scheduled task starts CapsLang quietly afterward.
 
-            Elevated apps (for example Task Manager run as administrator) may
-            not receive CapsLang key handling unless CapsLang is also elevated.
-            That is a Windows security limitation (UIPI), not a CapsLang bug.
+            Tray menu: Enabled, Launch on startup, Help, Exit.
 
-            Disable any PowerToys CapsLock remapping while CapsLang is running.
+            Turn off any PowerToys CapsLock remap while CapsLang is running.
 
             Credit by nakorncode
             https://github.com/nakorncode/capslang
@@ -295,36 +354,153 @@ internal static class SettingsStore
     }
 }
 
-internal static class StartupShortcut
+internal static class LegacyStartupShortcut
 {
     private static string ShortcutPath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "CapsLang.lnk");
 
-    public static bool IsEnabled() => File.Exists(ShortcutPath);
-
-    public static void Enable()
+    public static void RemoveIfPresent()
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(ShortcutPath)!);
-
-        var shellType = Type.GetTypeFromProgID("WScript.Shell");
-        if (shellType is null)
+        try
         {
-            throw new InvalidOperationException("WScript.Shell is not available.");
+            if (File.Exists(ShortcutPath))
+            {
+                File.Delete(ShortcutPath);
+            }
         }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+}
 
-        dynamic shell = Activator.CreateInstance(shellType)!;
-        dynamic shortcut = shell.CreateShortcut(ShortcutPath);
-        shortcut.TargetPath = Application.ExecutablePath;
-        shortcut.WorkingDirectory = AppContext.BaseDirectory;
-        shortcut.Description = "CapsLang — CapsLock switches input language";
-        shortcut.Save();
+internal static class ElevatedStartup
+{
+    private const string FolderName = "NakornCode";
+    private const string TaskName = "CapsLang";
+    private const int TaskCreateOrUpdate = 6;
+    private const int TaskLogonInteractiveToken = 3;
+    private const int TaskRunLevelHighest = 1;
+    private const int TaskTriggerLogon = 9;
+    private const int TaskActionExec = 0;
+
+    public static bool Exists()
+    {
+        try
+        {
+            return GetTask() is not null;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
-    public static void Disable()
+    public static bool IsEnabled()
     {
-        if (File.Exists(ShortcutPath))
+        try
         {
-            File.Delete(ShortcutPath);
+            dynamic? task = GetTask();
+            return task is not null && (bool)task.Enabled;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    public static void EnsureRegistered(bool enableAtLogon)
+    {
+        var service = Connect();
+        var folder = GetOrCreateFolder(service);
+        dynamic definition = service.NewTask(0);
+        definition.RegistrationInfo.Description = "Start CapsLang elevated at logon so CapsLock can switch input languages in all apps.";
+        definition.Principal.UserId = WindowsIdentity.GetCurrent().Name;
+        definition.Principal.LogonType = TaskLogonInteractiveToken;
+        definition.Principal.RunLevel = TaskRunLevelHighest;
+        definition.Settings.Enabled = enableAtLogon;
+        definition.Settings.StartWhenAvailable = true;
+        definition.Settings.DisallowStartIfOnBatteries = false;
+        definition.Settings.StopIfGoingOnBatteries = false;
+        definition.Settings.AllowDemandStart = true;
+        definition.Settings.ExecutionTimeLimit = "PT0S";
+        definition.Settings.MultipleInstances = 0; // Ignore new
+
+        dynamic trigger = definition.Triggers.Create(TaskTriggerLogon);
+        trigger.UserId = WindowsIdentity.GetCurrent().Name;
+
+        dynamic action = definition.Actions.Create(TaskActionExec);
+        action.Path = Application.ExecutablePath;
+        action.WorkingDirectory = AppContext.BaseDirectory;
+
+        folder.RegisterTaskDefinition(
+            TaskName,
+            definition,
+            TaskCreateOrUpdate,
+            null,
+            null,
+            TaskLogonInteractiveToken);
+    }
+
+    public static void SetEnabled(bool enabled)
+    {
+        if (!Exists())
+        {
+            if (enabled)
+            {
+                EnsureRegistered(enableAtLogon: true);
+            }
+
+            return;
+        }
+
+        dynamic task = GetTask()!;
+        task.Enabled = enabled;
+    }
+
+    public static void Run()
+    {
+        dynamic task = GetTask() ?? throw new InvalidOperationException("CapsLang startup task is missing.");
+        task.Run(null);
+    }
+
+    private static dynamic Connect()
+    {
+        var serviceType = Type.GetTypeFromProgID("Schedule.Service")
+            ?? throw new InvalidOperationException("Task Scheduler COM service is unavailable.");
+        dynamic service = Activator.CreateInstance(serviceType)
+            ?? throw new InvalidOperationException("Could not create Task Scheduler service.");
+        service.Connect();
+        return service;
+    }
+
+    private static dynamic GetOrCreateFolder(dynamic service)
+    {
+        dynamic root = service.GetFolder("\\");
+        try
+        {
+            return root.GetFolder(FolderName);
+        }
+        catch (Exception)
+        {
+            return root.CreateFolder(FolderName);
+        }
+    }
+
+    private static dynamic? GetTask()
+    {
+        var service = Connect();
+        try
+        {
+            dynamic folder = service.GetFolder("\\" + FolderName);
+            return folder.GetTask(TaskName);
+        }
+        catch (Exception)
+        {
+            return null;
         }
     }
 }

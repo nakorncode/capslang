@@ -1,94 +1,89 @@
 # CapsLang
 
-![CapsLang icon](assets/capslang-icon.png)
+![CapsLang](assets/capslang-icon.png)
 
-CapsLang is a tiny Windows tray app that turns `CapsLock` into an input-language
-switch key.
+Switch Windows input languages with **CapsLock**. Keep the real Caps Lock behind **Alt+CapsLock**. That is the whole product.
 
-It posts `WM_INPUTLANGCHANGEREQUEST` to the foreground window instead of
-sending `Win+Space`, so fast typing cannot accidentally trigger shortcuts such
-as `Win+Space+1` or `Win+Space+D`.
+CapsLang lives in the tray, stays out of the way, and runs elevated so the remap still works when the focused window is an administrator app.
 
-## Features
+## Install
 
-- `CapsLock` switches to the next Windows input language
-- `Alt+CapsLock` toggles real CapsLock
-- Quiet tray process (no settings window)
-- Tray menu: Enabled, Launch on startup, Help, Exit
-- Portable ZIP and Inno Setup installer from GitHub Releases
+Grab the latest Windows build from
+[Releases](https://github.com/nakorncode/capslang/releases/latest):
 
-## Download
-
-- [CapsLang-Setup-win-x64.exe](https://github.com/nakorncode/capslang/releases/latest/download/CapsLang-Setup-win-x64.exe) — installer
-- [CapsLang-Portable-win-x64.zip](https://github.com/nakorncode/capslang/releases/latest/download/CapsLang-Portable-win-x64.zip) — portable build
-- [SHA256 checksums](https://github.com/nakorncode/capslang/releases/latest/download/CapsLang-SHA256SUMS.txt)
-
-Release builds are self-contained. No separate .NET runtime install is required.
-
-## Key bindings
-
-| Shortcut | Action |
+| File | Use |
 | --- | --- |
-| `CapsLock` | Switch to the next input language (keep CapsLock off) |
-| `Alt+CapsLock` | Toggle real CapsLock |
+| `CapsLang-Setup-win-x64.exe` | Installer |
+| `CapsLang-Portable-win-x64.zip` | Unpack and run `CapsLang.exe` |
+| `CapsLang-SHA256SUMS.txt` | Checksums |
 
-## Tray menu
+No separate .NET install is required. Builds are self-contained `win-x64`.
 
-Right-click the CapsLang tray icon:
+## How it works
 
-- **Enabled** — turn the CapsLock remap on or off
-- **Launch on startup** — create or remove the Windows Startup shortcut
-- **Help** — overview, bindings, limitations, and credit
-- **Exit** — quit CapsLang
+| Input | Result |
+| --- | --- |
+| `CapsLock` | Next Windows input language |
+| `Alt+CapsLock` | Toggle real Caps Lock |
 
-Defaults on first run: Enabled **on**, Launch on startup **on**.
+Language switching uses `WM_INPUTLANGCHANGEREQUEST` on the foreground window. CapsLang does **not** fake `Win+Space`, so you avoid chord accidents like `Win+Space+1`.
 
-Settings are saved under `%LOCALAPPDATA%\CapsLang\settings.json`.
+### Elevation (one UAC, then quiet)
 
-## Notes
+Windows blocks low-level keyboard hooks from a normal process when an elevated window is focused. CapsLang therefore runs as administrator.
 
-- Elevated apps (for example Task Manager running as administrator) may not
-  receive CapsLang key handling unless CapsLang is also elevated. That is a
-  Windows UIPI limitation.
-- Disable any PowerToys CapsLock remap while CapsLang is running.
+1. First launch asks for UAC once.
+2. CapsLang registers a logon scheduled task (`NakornCode\CapsLang`) with highest privileges.
+3. Later logons and tray restarts go through that task — no repeated prompts.
+
+Defaults: remap **Enabled**, **Launch on startup**, and elevated task registration are all on.
+
+### Tray menu
+
+- **Enabled** — remap on/off
+- **Launch on startup** — enable/disable the elevated logon task
+- **Help** — short overview
+- **Exit** — quit
+
+Settings file: `%LOCALAPPDATA%\CapsLang\settings.json`
+
+## Tips
+
+- If PowerToys (or anything else) also remaps CapsLock, turn that remap off.
+- Uninstall/disable startup from the tray, or remove the `NakornCode\CapsLang` task in Task Scheduler.
 - CapsLang is Windows-only.
 
-## Build from source
+## Build
 
-Requirements:
-
-- Windows
-- .NET 8 SDK
-- [Inno Setup 6](https://jrsoftware.org/isinfo.php) (for installer packaging)
+Needs .NET 8 SDK. Installer packaging also needs [Inno Setup 6](https://jrsoftware.org/isinfo.php).
 
 ```powershell
 dotnet build
+dotnet run --configuration Release
 ```
 
-Publish portable ZIP + installer locally:
+Ship assets locally:
 
 ```powershell
 .\scripts\publish-release.ps1
 ```
 
-Assets are written to `artifacts\release`.
+Output lands in `artifacts\release\`.
 
-## GitHub release
+## Release CI
+
+Tag and push:
 
 ```powershell
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
-The release workflow builds self-contained `win-x64` assets and uploads:
-
-- `CapsLang-Portable-win-x64.zip`
-- `CapsLang-Setup-win-x64.exe`
-- `CapsLang-SHA256SUMS.txt`
+GitHub Actions publishes the portable ZIP, Inno installer, and checksums.
 
 ## Credit
 
-Created by [nakorncode](https://github.com/nakorncode).
+[nakorncode](https://github.com/nakorncode)
 
 ## License
 
