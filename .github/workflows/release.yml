@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "Existing tag to release, for example v0.1.0"
+        description: "Existing tag to release, for example v1.0.0"
         required: true
         type: string
 
@@ -34,10 +34,10 @@ jobs:
         with:
           ref: ${{ steps.release_tag.outputs.tag }}
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          dotnet-version: 8.0.x
+          targets: x86_64-pc-windows-msvc
 
       - name: Install Inno Setup
         shell: pwsh

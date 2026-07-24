@@ -4,7 +4,7 @@
 
 Switch Windows input languages with **CapsLock**. Keep the real Caps Lock behind **Alt+CapsLock**. That is the whole product.
 
-CapsLang lives in the tray, stays out of the way, and runs elevated so the remap still works when the focused window is an administrator app.
+CapsLang is a tiny **Rust** tray binary. It stays out of the way and runs elevated so the remap still works when the focused window is an administrator app.
 
 ## Install
 
@@ -17,7 +17,7 @@ Grab the latest Windows build from
 | `CapsLang-Portable-win-x64.zip` | Unpack and run `CapsLang.exe` |
 | `CapsLang-SHA256SUMS.txt` | Checksums |
 
-No separate .NET install is required. Builds are self-contained `win-x64`.
+No .NET runtime. No Tauri/WebView bundle — just the CapsLang executable.
 
 ## How it works
 
@@ -26,7 +26,7 @@ No separate .NET install is required. Builds are self-contained `win-x64`.
 | `CapsLock` | Next Windows input language |
 | `Alt+CapsLock` | Toggle real Caps Lock |
 
-Language switching uses `WM_INPUTLANGCHANGEREQUEST` on the foreground window. CapsLang does **not** fake `Win+Space`, so you avoid chord accidents like `Win+Space+1`.
+Language switching uses `WM_INPUTLANGCHANGEREQUEST` on the foreground window. CapsLang does **not** fake `Win+Space`.
 
 ### Elevation (one UAC, then quiet)
 
@@ -55,11 +55,11 @@ Settings file: `%LOCALAPPDATA%\CapsLang\settings.json`
 
 ## Build
 
-Needs .NET 8 SDK. Installer packaging also needs [Inno Setup 6](https://jrsoftware.org/isinfo.php).
+Needs a Rust MSVC toolchain (`stable-x86_64-pc-windows-msvc`). Installer packaging also needs [Inno Setup 6](https://jrsoftware.org/isinfo.php).
 
 ```powershell
-dotnet build
-dotnet run --configuration Release
+cargo build --release
+.\target\release\CapsLang.exe
 ```
 
 Ship assets locally:
@@ -72,11 +72,9 @@ Output lands in `artifacts\release\`.
 
 ## Release CI
 
-Tag and push:
-
 ```powershell
-git tag v0.2.0
-git push origin v0.2.0
+git tag v1.0.0
+git push origin v1.0.0
 ```
 
 GitHub Actions publishes the portable ZIP, Inno installer, and checksums.

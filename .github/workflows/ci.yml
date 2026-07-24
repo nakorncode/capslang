@@ -15,16 +15,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          dotnet-version: 8.0.x
-
-      - name: Restore
-        run: dotnet restore CapsLang.csproj
+          targets: x86_64-pc-windows-msvc
 
       - name: Build
-        run: dotnet build CapsLang.csproj --configuration Release --no-restore
+        shell: pwsh
+        run: cargo build --release --target x86_64-pc-windows-msvc
 
       - name: Install Inno Setup
         shell: pwsh

@@ -1,9 +1,9 @@
 param(
-    [ValidateSet("win-x64")]
-    [string] $Runtime = "win-x64",
+    [ValidateSet("x86_64-pc-windows-msvc")]
+    [string] $Target = "x86_64-pc-windows-msvc",
 
-    [ValidateSet("Release", "Debug")]
-    [string] $Configuration = "Release",
+    [ValidateSet("release", "debug")]
+    [string] $Profile = "release",
 
     [string] $ProductVersion,
 
@@ -12,14 +12,16 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$env:Path = "C:\Users\nakorncode\.cargo\bin;$env:USERPROFILE\.cargo\bin;" + $env:Path
+
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptDir
-$projectPath = Join-Path $repoRoot "CapsLang.csproj"
-$publishDir = Join-Path $repoRoot "artifacts\publish\$Runtime"
+$cargoToml = Join-Path $repoRoot "Cargo.toml"
 $releaseDir = Join-Path $repoRoot "artifacts\release"
+$publishDir = Join-Path $repoRoot "artifacts\publish\win-x64"
 $installerDir = Join-Path $repoRoot "artifacts\installer"
-$zipPath = Join-Path $releaseDir "CapsLang-Portable-$Runtime.zip"
-$setupExePath = Join-Path $releaseDir "CapsLang-Setup-$Runtime.exe"
+$zipPath = Join-Path $releaseDir "CapsLang-Portable-win-x64.zip"
+$setupExePath = Join-Path $releaseDir "CapsLang-Setup-win-x64.exe"
 $checksumPath = Join-Path $releaseDir "CapsLang-SHA256SUMS.txt"
 $innoScriptPath = Join-Path $repoRoot "installer\CapsLang.iss"
 
@@ -37,17 +39,12 @@ function Get-ProductVersion {
         return $gitTag.TrimStart("v")
     }
 
-    [xml] $projectXml = Get-Content $projectPath
-    return $projectXml.Project.PropertyGroup.Version
-}
-
-function Get-FileVersion([string] $version) {
-    $parts = $version.Split(".")
-    while ($parts.Count -lt 4) {
-        $parts += "0"
+    $match = Select-String -Path $cargoToml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+    if ($match) {
+        return $match.Matches[0].Groups[1].Value
     }
 
-    return ($parts | Select-Object -First 4) -join "."
+    return "0.0.0"
 }
 
 function Get-IsccPath {
@@ -69,7 +66,6 @@ function Get-IsccPath {
 }
 
 $resolvedVersion = Get-ProductVersion
-$fileVersion = Get-FileVersion $resolvedVersion
 
 $runningApps = Get-Process -Name "CapsLang" -ErrorAction SilentlyContinue
 if ($runningApps) {
@@ -77,28 +73,44 @@ if ($runningApps) {
     $runningApps | Stop-Process -Force
 }
 
-if (Test-Path $publishDir) {
-    Remove-Item -LiteralPath $publishDir -Recurse -Force
-}
-
 New-Item -ItemType Directory -Force -Path $publishDir, $releaseDir, $installerDir | Out-Null
 
 Get-ChildItem -Path $releaseDir -File -Filter "CapsLang-*" -ErrorAction SilentlyContinue | Remove-Item -Force
 Get-ChildItem -Path $installerDir -File -Filter "CapsLang-*" -ErrorAction SilentlyContinue | Remove-Item -Force
+Get-ChildItem -Path $publishDir -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
 
-dotnet publish $projectPath `
-    --configuration $Configuration `
-    --runtime $Runtime `
-    --self-contained true `
-    --output $publishDir `
-    -p:PublishSingleFile=true `
-    -p:IncludeNativeLibrariesForSelfExtract=true `
-    -p:DebugType=None `
-    -p:DebugSymbols=false `
-    -p:Version=$resolvedVersion `
-    -p:FileVersion=$fileVersion `
-    -p:AssemblyVersion=$fileVersion `
-    -p:InformationalVersion=$resolvedVersion
+Push-Location $repoRoot
+try {
+    if ($Profile -eq "release") {
+        cargo build --release --target $Target
+        $builtExe = Join-Path $repoRoot "target\$Target\release\CapsLang.exe"
+    }
+    else {
+        cargo build --target $Target
+        $builtExe = Join-Path $repoRoot "target\$Target\debug\CapsLang.exe"
+    }
+}
+finally {
+    Pop-Location
+}
+
+if (-not (Test-Path $builtExe)) {
+    # Fallback for host-triple output layout
+    $fallback = if ($Profile -eq "release") {
+        Join-Path $repoRoot "target\release\CapsLang.exe"
+    } else {
+        Join-Path $repoRoot "target\debug\CapsLang.exe"
+    }
+    if (Test-Path $fallback) {
+        $builtExe = $fallback
+    } else {
+        throw "Built CapsLang.exe was not found."
+    }
+}
+
+Copy-Item -LiteralPath $builtExe -Destination (Join-Path $publishDir "CapsLang.exe") -Force
+Copy-Item -LiteralPath (Join-Path $repoRoot "LICENSE") -Destination (Join-Path $publishDir "LICENSE") -Force
+Copy-Item -LiteralPath (Join-Path $repoRoot "README.md") -Destination (Join-Path $publishDir "README.md") -Force
 
 if (Test-Path $zipPath) {
     Remove-Item -LiteralPath $zipPath -Force
@@ -135,5 +147,5 @@ Set-Content -Path $checksumPath -Value $hashLines -Encoding ASCII
 
 Write-Host "Release assets created:"
 Get-ChildItem -Path $releaseDir -File | Sort-Object Name | ForEach-Object {
-    Write-Host " - $($_.FullName)"
+    Write-Host " - $($_.FullName) ($([math]::Round($_.Length / 1MB, 2)) MB)"
 }

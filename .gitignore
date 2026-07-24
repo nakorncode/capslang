@@ -1,6 +1,7 @@
 bin/
 obj/
 artifacts/
+target/
 .vs/
 .vscode/
 *.user

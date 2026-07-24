@@ -1,6 +1,6 @@
 #define MyAppName "CapsLang"
 #ifndef MyAppVersion
-#define MyAppVersion "0.2.0"
+#define MyAppVersion "1.0.0"
 #endif
 #define MyAppPublisher "NakornCode"
 #define MyAppExeName "CapsLang.exe"
